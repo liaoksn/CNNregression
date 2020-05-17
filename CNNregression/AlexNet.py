@@ -183,18 +183,10 @@ def read_records(filename, resize_height, resize_width, type=None):
         }
     )
     tf_image = tf.decode_raw(features['image_raw'], tf.uint8)  # 获得图像原始的数据
-
-    #tf_height = features['height']
-    #tf_width = features['width']
-    #tf_depth = features['depth']
-
     tf_label = tf.decode_raw(features['labels'], tf.float32)
     # PS:恢复原始图像数据,reshape的大小必须与保存之前的图像shape一致,否则出错
     tf_image = tf.reshape(tf_image, [resize_height, resize_width, 3])  # 设置图像的维度
     tf_label = tf.reshape(tf_label, [15])  # 设置图像label的维度
-
-    # 恢复数据后,才可以对图像进行resize_images:输入uint->输出float32
-    # tf_image=tf.image.resize_images(tf_image,[224, 224])
 
     # [3]数据类型处理
     # 存储的图像类型为uint8,tensorflow训练时数据必须是tf.float32
@@ -237,6 +229,7 @@ def get_batch_images(images, labels, batch_size, labels_nums, one_hot=False, shu
                                                     num_threads=num_threads)
     if one_hot:
         labels_batch = tf.one_hot(labels_batch, labels_nums, 1, 0)
+    #print("Batches have been transformed")
     return images_batch, labels_batch
 
 def get_example_nums(tf_records_filenames):
@@ -280,34 +273,12 @@ saver = tf.train.Saver(max_to_keep=5)
 
 # 如果有检查点文件，读取最新的检查点文件，恢复各种变量值
 ckpt = tf.train.latest_checkpoint(ckpt_dir)
-#if ckpt != None:
-#    saver.restore(sess, ckpt)  # 加载所有参数
-#    # 从这里开始可直接使用模型进行预测，或者接着训练
-#else:
-#    print("Training from scratch.")
-
-# 获取续训参数
-
-#start = sess.run(epoch)
-#print("Training starts from {} epoch.".format(start + 1))
-
-
-
 
 # 2.3迭代训练
-'''
-def get_train_batch(number, batch_size):
-     
-    #return Xtrain[number * batch_size:(number + 1) * batch_size], Ytrain[number * batch_size:(number + 1) * batch_size]
-    image_batch, label_batch = get_batch_images(tf_image, tf_label, batch_size=4, labels_nums=15, one_hot=False,
-                                                shuffle=True)
-    return 
-'''
 
-#for ep in range(start, train_epochs):
+init = tf.global_variables_initializer()
+local_init_op = tf.local_variables_initializer()
 with tf.Session() as sess:
-    init = tf.global_variables_initializer()
-    local_init_op = tf.local_variables_initializer()
     sess.run(local_init_op)
     sess.run(init)
     if ckpt != None:
@@ -317,57 +288,62 @@ with tf.Session() as sess:
         print("Training from scratch.")
     start = sess.run(epoch)
     print("Training starts from {} epoch.".format(start + 1))
-    #with tf.Session() as sess:
-    for ep in range(start, train_epochs):
-        tf_image, tf_label = read_records(train_record_list, resize_height, resize_width, type='normalization')
-        image_batch, label_batch = get_batch_images(tf_image, tf_label, batch_size=batch_size, labels_nums=15, one_hot=False,
-                                                    shuffle=True)
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(coord=coord)
 
-        try:
-            while not coord.should_stop():
+    tf_image, tf_label = read_records(train_record_list, resize_height, resize_width, type='normalization')
+    image_batch, label_batch = get_batch_images(tf_image, tf_label, batch_size=batch_size, labels_nums=15,
+                                                one_hot=False,
+                                                shuffle=True)
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(coord=coord)
+    try:
+        while not coord.should_stop():
+            for ep in range(start, train_epochs):
                 for i in range(total_batch):
                     batch_x, batch_y = sess.run([image_batch, label_batch])
                     sess.run(optimizer, feed_dict={x: batch_x, y: batch_y})
-
+                   # print("Training starts from {}range.".format(i))
                     if i % 5 == 0:
                         print("Step {}".format(i), "finished")
-
                 loss = sess.run(loss_function, feed_dict={x: batch_x, y: batch_y})
                 epoch_list.append(ep + 1)
                 loss_list.append(loss)
-
                 print("Train epoch:", '%02d' % (sess.run(epoch) + 1), "Loss=", "{:.6f}".format(loss))
 
-                test_pred = sess.run(pred, feed_dict={x: batch_x, y: batch_y})  #输出预测值
-                pred_list.append(test_pred)
-                #print(test_pred)
-                np_pred = np.array(pred_list)
-                #print(np_pred.shape)!!!
-                np_pred=np_pred.reshape(-1,15)
-                np.savetxt('E:/ZJU study/training_data/Erecords/pred{}.txt'.format(ep), np_pred,fmt="%f")
+                #直接调用训练集数据输出预测值模块
+                # test_pred = sess.run(pred, feed_dict={x: batch_x, y: batch_y})  # 输出预测值
+                # pred_list.append(test_pred)
+                # # print(test_pred)
+                # np_pred = np.array(pred_list)
+                # # print(np_pred.shape)!!!
+                # np_pred = np_pred.reshape(-1, 15)
+                # np.savetxt('E:/ZJU study/training_data/Erecords/pred{}.txt'.format(ep), np_pred, fmt="%f")
 
                 # 保存检查点
-                saver.save(sess, ckpt_dir +'/'+ "hb_cnn_model.cpkt", global_step=ep + 1)
+                saver.save(sess, ckpt_dir + '/' + "hb_cnn_model.cpkt", global_step=ep + 1)
                 sess.run(epoch.assign(ep + 1))
-        except tf.errors.OutOfRangeError:
-            print('Done training for epochs')
-        finally:
-        # Stop the threads
+
+            #epoch执行完毕之后停止队列,加入线程
             coord.request_stop()
             # Wait for threads to stop
             coord.join(threads)
 
+    except tf.errors.OutOfRangeError:         #read_records->tf.train.string_input_producer函数中设置了num_epochs,则在输出指定数量的数据后会产生该error
+
+        print('Done training for epochs')
+    finally:
+    # Stop the threads
+        coord.request_stop()
+    # Wait for threads to stop
+        coord.join(threads)
 
 duration = time() - startTime
 print("Train finished takes:", duration)
 
 # 2.4可视化损失值
-
 fig = plt.gcf()
 fig.set_size_inches(4, 2)
 plt.plot(epoch_list, loss_list, label='loss')
 plt.ylabel('loss')
 plt.xlabel('epoch')
 plt.legend(['loss'], loc='upper right')
+plt.show()
